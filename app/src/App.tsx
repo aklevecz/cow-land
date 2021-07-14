@@ -3,11 +3,12 @@ import "./App.css";
 import { useThreeScene } from "./contexts/Three";
 
 function App() {
-  const threeScene = useThreeScene();
+  const { initScene } = useThreeScene();
   useEffect(() => {
-    threeScene.initScene();
+    console.log("shit");
+    initScene();
     // threeScene.RAF();
-  }, []);
+  }, [initScene]);
   return <div className="App"></div>;
 }
 

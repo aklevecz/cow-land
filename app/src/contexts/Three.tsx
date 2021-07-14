@@ -1,6 +1,13 @@
 import { useEffect } from "react";
 import { createContext, useContext, useReducer } from "react";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import * as THREE from "three";
+import { useState } from "react";
+import { LOOK_AT_PIZZA, PIZZA_FBX } from "./constants";
+import { useCallback } from "react";
+
+type Entity = THREE.Mesh | THREE.Group;
 
 type Action =
   | {
@@ -9,11 +16,9 @@ type Action =
       scene: THREE.Scene;
       camera: THREE.PerspectiveCamera;
       domElement: HTMLElement;
+      controls: OrbitControls;
     }
-  | {
-      type: "SET_RAF";
-      previousRAF: number;
-    };
+  | { type: "ADD_ENITITIES"; entities: Entity[] };
 
 type Dispatch = (action: Action) => void;
 
@@ -23,8 +28,9 @@ type State = {
   scene: THREE.Scene | undefined;
   domElement: HTMLElement | undefined;
   camera: THREE.PerspectiveCamera | undefined;
+  controls: OrbitControls | undefined;
   player: any;
-  entities: Array<THREE.Mesh> | undefined;
+  entities: Array<Entity>;
   sceneLoaded: boolean;
   something: Array<any> | undefined;
 };
@@ -34,6 +40,7 @@ const initialState = {
   renderer: undefined,
   scene: undefined,
   camera: undefined,
+  controls: undefined,
   domElement: undefined,
   player: undefined,
   entities: [],
@@ -54,11 +61,12 @@ const reducer = (state: State, action: Action) => {
         scene: action.scene,
         camera: action.camera,
         sceneLoaded: true,
+        controls: action.controls,
       };
-    case "SET_RAF":
+    case "ADD_ENITITIES":
       return {
         ...state,
-        previousRAF: action.previousRAF,
+        entities: [...state.entities, ...action.entities],
       };
     default:
       return state;
@@ -72,6 +80,26 @@ const ThreeProvider = ({
 }) => {
   const [state, dispatch] = useReducer(reducer, initialState);
 
+  const loadFBX = (path: string) => {
+    const loader = new FBXLoader();
+    loader.load(path, (object) => {
+      if (state.scene === undefined) {
+        return console.log("no scene");
+      }
+      // This could be removed and they could just be loaded first
+      state.scene.add(object);
+
+      dispatch({ type: "ADD_ENITITIES", entities: [object] });
+    });
+  };
+
+  useEffect(() => {
+    if (state.scene) {
+      loadFBX(PIZZA_FBX);
+    }
+    //eslint-disable-next-line
+  }, [state.scene]);
+
   const value = { state, dispatch };
   return (
     <ThreeContext.Provider value={value}>{children}</ThreeContext.Provider>
@@ -81,13 +109,16 @@ const ThreeProvider = ({
 export { ThreeContext, ThreeProvider };
 
 export const useThreeScene = () => {
+  const [previousRAF, setPreviousRAF] = useState(0);
   const context = useContext(ThreeContext);
 
   if (context === undefined) {
     throw new Error("Three Context error in ThreeScene hook");
   }
 
-  const initScene = () => {
+  const { dispatch, state } = context;
+
+  const initScene = useCallback(() => {
     const renderer = new THREE.WebGLRenderer();
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -95,34 +126,42 @@ export const useThreeScene = () => {
     renderer.setSize(width, height);
     renderer.physicallyCorrectLights = true;
     renderer.outputEncoding = THREE.sRGBEncoding;
+    const domElement = renderer.domElement;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(65, windowAspect, 0.1, 1000);
-    camera.position.z = 5;
-    const light = new THREE.HemisphereLight(0xffffbb, 0x080820, 1);
+    const { x, y, z } = LOOK_AT_PIZZA;
+    camera.position.set(x, y, z);
+
+    const controls = new OrbitControls(camera, domElement);
+    controls.autoRotate = true;
+    controls.update();
+
+    const light = new THREE.HemisphereLight(0xffffbb, 0x080820, 0.5);
     scene.add(light);
+
+    const ambient = new THREE.AmbientLight(0xfffff, 1);
+    scene.add(ambient);
 
     const geometry = new THREE.BoxGeometry();
     const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
     const cube = new THREE.Mesh(geometry, material);
     scene.add(cube);
 
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(20000, 20000, 10, 10),
-      new THREE.MeshLambertMaterial({ color: 0xffffff })
-    );
-    ground.position.y = -1;
-    ground.castShadow = false;
-    ground.receiveShadow = true;
-    ground.rotation.x = -Math.PI / 2;
-    scene.add(ground);
+    // const ground = new THREE.Mesh(
+    //   new THREE.PlaneGeometry(20000, 20000, 10, 10),
+    //   new THREE.MeshLambertMaterial({ color: 0xffffff })
+    // );
+    // ground.position.y = -1;
+    // ground.castShadow = false;
+    // ground.receiveShadow = true;
+    // ground.rotation.x = -Math.PI / 2;
+    // scene.add(ground);
 
-    const domElement = renderer.domElement;
-
-    dispatch({ type: "INIT", renderer, scene, camera, domElement });
+    dispatch({ type: "INIT", renderer, scene, camera, domElement, controls });
 
     document.body.appendChild(domElement);
-  };
+  }, [dispatch]);
 
   const step = (timeElapsed: number) => {
     const timeElapsedS = Math.min(1.0, 30, timeElapsed * 0.001);
@@ -143,16 +182,15 @@ export const useThreeScene = () => {
         return console.log("no camera");
       }
       if (state.sceneLoaded) {
-        const previousRAF = state.previousRAF ? state.previousRAF : t;
-        step(t - previousRAF);
+        const _previousRAF = previousRAF ? previousRAF : t;
+        step(t - _previousRAF);
         state.renderer.render(state.scene, state.camera);
-        dispatch({ type: "SET_RAF", previousRAF });
+        state.controls && state.controls.update();
+        setPreviousRAF(_previousRAF);
       }
       setTimeout(() => RAF(), 1);
     });
   };
-
-  const { dispatch, state } = context;
 
   useEffect(() => {
     if (state.renderer) {
@@ -161,6 +199,7 @@ export const useThreeScene = () => {
 
     return () =>
       cancelAnimationFrame(state.previousRAF ? state.previousRAF : 0);
+    //eslint-disable-next-line
   }, [state.renderer]);
 
   return { initScene, RAF };
